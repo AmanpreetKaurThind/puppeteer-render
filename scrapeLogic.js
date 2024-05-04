@@ -1,50 +1,87 @@
 const puppeteer = require("puppeteer");
-require("dotenv").config();
+const fetch = require("cross-fetch");
+const { puppeteerRealBrowser } = require("puppeteer-real-browser");
+const { DEFAULT_INTERCEPT_RESOLUTION_PRIORITY } = require("puppeteer");
+const { PuppeteerBlocker } = require("@cliqz/adblocker-puppeteer");
+
+const AdblockerPlugin = require("puppeteer-extra-plugin-adblocker");
+const puppeteerExtra = require("puppeteer-extra");
+
+puppeteerExtra.use(
+  AdblockerPlugin({
+    interceptResolutionPriority: DEFAULT_INTERCEPT_RESOLUTION_PRIORITY,
+  })
+);
+
+function wait(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
 
 const scrapeLogic = async (res) => {
-  const browser = await puppeteer.launch({
-    args: [
-      "--disable-setuid-sandbox",
-      "--no-sandbox",
-      "--single-process",
-      "--no-zygote",
-    ],
-    executablePath:
-      process.env.NODE_ENV === "production"
-        ? process.env.PUPPETEER_EXECUTABLE_PATH
-        : puppeteer.executablePath(),
-  });
   try {
-    const page = await browser.newPage();
+    const browser = await puppeteer.launch({
+      args: [
+        "--disable-setuid-sandbox",
+        "--no-sandbox",
+        "--single-process",
+        "--no-zygote",
+      ],
+      executablePath:
+        process.env.NODE_ENV === "production"
+          ? process.env.PUPPETEER_EXECUTABLE_PATH
+          : puppeteer.executablePath(),
+    });
 
-    await page.goto("https://developer.chrome.com/");
+    const id = "YOUR_ID"; // Set your id here or pass it as an argument
 
-    // Set screen size
-    await page.setViewport({ width: 1080, height: 1024 });
+    let linkInfo = await (await fetch("https://api-gateway.platoboost.com/v1/authenticators/8/" + id)).json();
 
-    // Type into search box
-    await page.type(".search-box__input", "automate beyond recorder");
+    if (linkInfo.key) {
+      res.status(200).json(linkInfo.key);
+      await browser.close();
+      return;
+    }
 
-    // Wait and click on first result
-    const searchResultSelector = ".search-box__link";
-    await page.waitForSelector(searchResultSelector);
-    await page.click(searchResultSelector);
+    const { browser: realBrowser, page } = await puppeteerRealBrowser({
+      headless: false,
+      action: "default",
+      executablePath: "default",
+    });
 
-    // Locate the full title with a unique string
-    const textSelector = await page.waitForSelector(
-      "text/Customize and automate"
-    );
-    const fullTitle = await textSelector.evaluate((el) => el.textContent);
+    const blocker = await PuppeteerBlocker.fromPrebuiltAdsAndTracking(fetch);
+    blocker.enableBlockingInPage(page);
 
-    // Print the full title
-    const logStatement = `The title of this blog post is ${fullTitle}`;
-    console.log(logStatement);
-    res.send(logStatement);
-  } catch (e) {
-    console.error(e);
-    res.send(`Something went wrong while running Puppeteer: ${e}`);
-  } finally {
-    await browser.close();
+    await page.goto("https://gateway.platoboost.com/a/8?id=" + id);
+    await page.waitForXPath("//button[contains(., 'Continue')]");
+    const continueButton = await page.$x("//button[contains(., 'Continue')]");
+    if (continueButton.length > 0) {
+      await continueButton[0].click();
+      await wait(5000);
+      await page.goto(`https://gateway.platoboost.com/a/8?id=${id}&tk=ui7c`);
+      await page.waitForXPath("//button[contains(., 'Continue')]");
+      const continueButtonAfterRedirect = await page.$x("//button[contains(., 'Continue')]");
+      if (continueButtonAfterRedirect.length > 0) {
+        await continueButtonAfterRedirect[0].click();
+        await wait(5000);
+        linkInfo = await (await fetch("https://api-gateway.platoboost.com/v1/authenticators/8/" + id)).json();
+        await realBrowser.close();
+        res.status(200).json(linkInfo.key);
+        return;
+      } else {
+        res.status(400).json({ error: "Continue button not found after redirect" });
+        await realBrowser.close();
+        return;
+      }
+    } else {
+      res.status(400).json({ error: "Continue button not found" });
+      await realBrowser.close();
+      return;
+    }
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).send(`Something went wrong while running Puppeteer: ${error}`);
   }
 };
 
