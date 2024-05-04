@@ -7,6 +7,7 @@ WORKDIR /usr/src/app
 
 COPY package*.json ./
 RUN npm ci
+RUN npm install puppeteer-real-browser cross-fetch @cliqz/adblocker-puppeteer puppeteer
 COPY . .
 CMD [ "node", "index.js" ]
 
